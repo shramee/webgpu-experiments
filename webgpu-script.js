@@ -17,15 +17,13 @@ if (!navigator.gpu) {
     // the interface for GPU interactions
     const device = await adapter.requestDevice();
 
-    // WebGPU stuff here
-
     /** @type GPUCanvasContext */
     const ctx = canvas.getContext("webgpu");
 
     // GPU's preferred texture format (for data in memory)
     const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
 
-    // Connect context with device interface and memory format
+    // connect context with device interface and memory format
     ctx.configure({
         device,
         format: canvasFormat,
@@ -51,9 +49,92 @@ if (!navigator.gpu) {
         ],
     });
 
-    // End the render pass
+    // // drawing a square, GPUs work with triangles
+    // // data needs to be a typed array for size allocation
+    const vertices = new Float32Array([
+        // First triangle
+        -0.8, -0.8, 0.8, -0.8, 0.8, 0.8,
+        // second triangle with a common edge
+        -0.8, -0.8, 0.8, 0.8, -0.8, 0.8,
+    ]);
+
+    // GPU memory requires GPUBuffer
+    const vertexBuffer = device.createBuffer({
+        // optional: for error messages
+        label: "Cell vertices",
+        // size allocation
+        size: vertices.byteLength,
+        // Use buffer as vertex and copy/write operation destination
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+
+    // write buffer - bufferObject, offset, data
+    device.queue.writeBuffer(vertexBuffer, 0, vertices);
+
+    // define structure of the buffer
+    const vertexBufferLayout = {
+        // Bytes to jump to move to next vertex, 2 dimensions * 4 bytes(float 32)
+        arrayStride: 8,
+        // specification of included attributes in the buffer
+        attributes: [
+            // position attribute
+            {
+                // https://gpuweb.github.io/gpuweb/#enumdef-gpuvertexformat
+                format: "float32x2",
+                // offset if your vertex has more than one attribute (like color/direction)
+                offset: 0,
+                // 0..15, unique id to link this to a particular input in vertex shader
+                shaderLocation: 0,
+            },
+        ],
+    };
+
+    // shader module with code to run shader
+    const cellShaderModule = device.createShaderModule({
+        label: "Cell shader",
+        // WGSL (WebGPU Shading Language) code
+        code: /*rust*/ `
+    	@vertex
+    	fn vertexMain( @location(0) pos: vec2f ) -> @builtin(position) vec4f {
+    		return vec4f(pos, 0, 1);
+    	}
+
+    	@fragment
+    	fn fragmentMain() -> @location(0) vec4f {
+    		return vec4f( 1,.8,.2,1 ); // rgba
+    	}
+    	`,
+    });
+
+    // add the shader to render pipeline
+    const cellPipeline = device.createRenderPipeline({
+        label: "Cell pipeline",
+        layout: "auto",
+        // Vertex shader description
+        vertex: {
+            module: cellShaderModule,
+            entryPoint: "vertexMain", // fn in code
+            buffers: [vertexBufferLayout],
+        },
+        // Fragment shader description
+        fragment: {
+            module: cellShaderModule,
+            entryPoint: "fragmentMain", // fn in code
+            targets: [
+                {
+                    format: canvasFormat,
+                },
+            ],
+        },
+    });
+
+    pass.setPipeline(cellPipeline);
+    pass.setVertexBuffer(0, vertexBuffer);
+    pass.draw(vertices.length / 2);
+
+    // end the render pass
     pass.end();
 
-    // Finish the encoder and pass it to the GPU
+    // finish the encoder and pass it to the GPU
     device.queue.submit([encoder.finish()]);
 })();
